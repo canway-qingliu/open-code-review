@@ -612,9 +612,11 @@ func (c *AnthropicClient) buildAnthropicParams(model string, req ChatRequest) an
 	}
 
 	if len(systemBlocks) > 0 {
+		systemBlocks[len(systemBlocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
 		params.System = systemBlocks
 	}
 	if len(tools) > 0 {
+		tools[len(tools)-1].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		params.Tools = tools
 	}
 	if req.Temperature != nil {

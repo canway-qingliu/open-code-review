@@ -158,20 +158,21 @@ type compressionJob struct {
 
 // Agent orchestrates the AI-powered code review.
 type Agent struct {
-	args              Args
-	diffs             []model.Diff // parsed diffs
-	totalInsertions   int64
-	totalDeletions    int64
-	currentDate       string
-	session           *session.SessionHistory
-	totalTokensUsed   int64 // accumulated total tokens from all LLM calls, accessed atomically
-	totalInputTokens  int64 // accumulated input/prompt tokens, accessed atomically
-	totalOutputTokens int64 // accumulated completion tokens, accessed atomically
-	subtaskFailed     int64 // count of failed subtasks, accessed atomically
-	warningsMu        sync.Mutex
-	warnings          []AgentWarning
-	compressionMu     sync.Mutex
-	pendingJob        *compressionJob
+	args                  Args
+	diffs                 []model.Diff // parsed diffs
+	totalInsertions       int64
+	totalDeletions        int64
+	currentDate           string
+	session               *session.SessionHistory
+	totalInputTokens      int64 // accumulated input/prompt tokens, accessed atomically
+	totalOutputTokens     int64 // accumulated completion tokens, accessed atomically
+	totalCacheReadTokens  int64 // accumulated cache read tokens, accessed atomically
+	totalCacheWriteTokens int64 // accumulated cache write tokens, accessed atomically
+	subtaskFailed         int64 // count of failed subtasks, accessed atomically
+	warningsMu            sync.Mutex
+	warnings              []AgentWarning
+	compressionMu         sync.Mutex
+	pendingJob            *compressionJob
 }
 
 // CommentWorkerPool manages a fixed-size pool of workers dedicated to
@@ -311,9 +312,10 @@ func (a *Agent) Diffs() []model.Diff {
 	return a.diffs
 }
 
-// TotalTokensUsed returns the accumulated total tokens from all LLM calls.
+// TotalTokensUsed returns PromptTokens + CompletionTokens across all LLM calls.
+// For Anthropic, PromptTokens already includes cache read/write tokens.
 func (a *Agent) TotalTokensUsed() int64 {
-	return atomic.LoadInt64(&a.totalTokensUsed)
+	return atomic.LoadInt64(&a.totalInputTokens) + atomic.LoadInt64(&a.totalOutputTokens)
 }
 
 // TotalInputTokens returns the accumulated input/prompt tokens from all LLM calls.
@@ -324,6 +326,16 @@ func (a *Agent) TotalInputTokens() int64 {
 // TotalOutputTokens returns the accumulated completion tokens from all LLM calls.
 func (a *Agent) TotalOutputTokens() int64 {
 	return atomic.LoadInt64(&a.totalOutputTokens)
+}
+
+// TotalCacheReadTokens returns the accumulated cache read tokens from all LLM calls.
+func (a *Agent) TotalCacheReadTokens() int64 {
+	return atomic.LoadInt64(&a.totalCacheReadTokens)
+}
+
+// TotalCacheWriteTokens returns the accumulated cache write tokens from all LLM calls.
+func (a *Agent) TotalCacheWriteTokens() int64 {
+	return atomic.LoadInt64(&a.totalCacheWriteTokens)
 }
 
 // Warnings returns a copy of non-fatal warnings recorded during review.
@@ -703,9 +715,10 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 	}
 	rec.SetResponse(resp, time.Since(startTime))
 	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
-		atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-		atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+		atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
+		atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
+		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
+		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 	}
 	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
@@ -787,11 +800,12 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		totalTokens := int64(0)
 		if resp.Usage != nil {
 			totalTokens = resp.Usage.TotalTokens
-			atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-			atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+			atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
+			atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
+			atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
+			atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 		}
 		telemetry.RecordLLMRequest(ctx, a.args.Model, duration, totalTokens, "ok")
-		atomic.AddInt64(&a.totalTokensUsed, totalTokens)
 
 		content := resp.Content()
 		calls := resp.ToolCalls()
@@ -920,9 +934,10 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 							if resp != nil {
 								rlRec.SetResponse(resp, time.Since(rlStart))
 								if resp.Usage != nil {
-									atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
-									atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-									atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+									atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
+									atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
+									atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
+									atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 								}
 							} else {
 								rlRec.SetError(fmt.Errorf("re-location LLM call failed"), time.Since(rlStart))
@@ -1190,9 +1205,10 @@ func (a *Agent) runCompression(ctx context.Context, msgs []llm.Message, filePath
 	}
 	rec.SetResponse(resp, duration)
 	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
-		atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
-		atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
+		atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
+		atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
+		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
+		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 	}
 
 	rawSummary := stripMarkdownFences(resp.Content())
