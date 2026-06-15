@@ -12,9 +12,9 @@ import (
 	"github.com/open-code-review/open-code-review/internal/suggestdiff"
 )
 
-func outputText(comments []model.LlmComment) {
+func outputText(comments []model.LlmComment, zh bool) {
 	if len(comments) == 0 {
-		fmt.Println("No comments generated. Looks good to me.")
+		fmt.Println(localizedText("no_comments", zh))
 		return
 	}
 	for _, c := range comments {
@@ -31,12 +31,12 @@ func hasSubtaskErrors(warnings []agent.AgentWarning) bool {
 	return false
 }
 
-func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning) {
+func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning, zh bool) {
 	if len(comments) == 0 {
 		if hasSubtaskErrors(warnings) {
-			fmt.Println("Some files could not be reviewed due to errors (see warnings below).")
+			fmt.Println(localizedText("partial_failed", zh))
 		} else {
-			fmt.Println("No comments generated. Looks good to me.")
+			fmt.Println(localizedText("no_comments", zh))
 		}
 	} else {
 		for _, c := range comments {
@@ -188,7 +188,7 @@ func outputJSON(comments []model.LlmComment) error {
 		Comments: comments,
 	}
 	if len(comments) == 0 {
-		out.Message = "No comments generated. Looks good to me."
+		out.Message = localizedText("no_comments", false)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -196,7 +196,7 @@ func outputJSON(comments []model.LlmComment) error {
 }
 
 func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning,
-	filesReviewed, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, duration time.Duration) error {
+	filesReviewed, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, duration time.Duration, zh bool) error {
 	out := jsonOutput{
 		Status:   "success",
 		Comments: comments,
@@ -213,9 +213,9 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 	}
 	if len(comments) == 0 {
 		if hasSubtaskErrors(warnings) {
-			out.Message = "Some files could not be reviewed due to errors."
+			out.Message = localizedText("partial_failed_json", zh)
 		} else {
-			out.Message = "No comments generated. Looks good to me."
+			out.Message = localizedText("no_comments", zh)
 		}
 	}
 	if len(warnings) > 0 {
@@ -231,15 +231,43 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 	return enc.Encode(out)
 }
 
-func outputJSONNoFiles() error {
+func outputJSONNoFiles(zh bool) error {
 	out := jsonOutput{
 		Status:   "skipped",
-		Message:  "No supported files changed.",
+		Message:  localizedText("no_files", zh),
 		Comments: []model.LlmComment{},
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func localizedText(key string, zh bool) string {
+	if zh {
+		switch key {
+		case "no_comments":
+			return "未生成审查意见，当前变更看起来没有明显问题。"
+		case "partial_failed":
+			return "部分文件审查失败（请查看下方警告信息）。"
+		case "partial_failed_json":
+			return "部分文件因错误未完成审查。"
+		case "no_files":
+			return "没有检测到可审查的受支持文件变更。"
+		}
+	}
+
+	switch key {
+	case "no_comments":
+		return "No comments generated. Looks good to me."
+	case "partial_failed":
+		return "Some files could not be reviewed due to errors (see warnings below)."
+	case "partial_failed_json":
+		return "Some files could not be reviewed due to errors."
+	case "no_files":
+		return "No supported files changed."
+	default:
+		return ""
+	}
 }
 
 func outputPreviewText(p *agent.DiffPreview) {

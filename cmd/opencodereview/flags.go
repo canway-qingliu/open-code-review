@@ -109,6 +109,7 @@ type reviewOptions struct {
 	maxTools       int
 	maxGitProcs    int
 	preview        bool
+	translateZH    bool
 	showHelp       bool
 }
 
@@ -131,6 +132,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per file (0 = template default; min 10)")
 	a.IntVar(&opts.maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
 	a.BoolVarP(&opts.preview, "preview", "p", false, "preview which files will be reviewed without running the LLM")
+	a.BoolVar(&opts.translateZH, "translate-zh", false, "translate review output to Chinese")
 
 	if err := a.Parse(args); err != nil {
 		return opts, fmt.Errorf("parse flags: %w", err)
@@ -203,6 +205,9 @@ Examples:
   # Agent mode (summary only, no progress lines)
   ocr review --audience agent
 
+	# Force Chinese output for this run
+	ocr review --translate-zh
+
   # Preview which files will be reviewed
   ocr review --preview
   ocr review -c abc123 -p
@@ -220,6 +225,7 @@ Flags:
   --repo string           root directory of the git repository (default: current dir)
   --rule string           path to JSON file with system review rules
   --timeout int           concurrent task timeout in minutes (default 10)
+	--translate-zh          translate review output to Chinese
   --to string             target ref to end diff at (e.g., 'feature-branch')
   --tools string          path to JSON tools config file (default: embedded)`)
 }

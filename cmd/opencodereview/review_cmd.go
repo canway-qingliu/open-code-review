@@ -84,9 +84,17 @@ func runReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load app config: %w", err)
 	}
+	lang := ""
 	if appCfg != nil {
-		tpl.ApplyLanguage(appCfg.Language)
+		lang = appCfg.Language
 	}
+	if opts.translateZH {
+		lang = "Chinese"
+	}
+	if lang != "" {
+		tpl.ApplyLanguage(lang)
+	}
+	useChineseOutput := shouldUseChineseOutput(lang, opts.translateZH)
 
 	ep, err := llm.ResolveEndpoint(cfgPath)
 	if err != nil {
@@ -163,7 +171,7 @@ func runReview(args []string) error {
 
 	// If no files were reviewed (e.g. workspace has no changes), inform the caller in JSON mode.
 	if opts.outputFormat == "json" && len(comments) == 0 && ag.FilesReviewed() == 0 {
-		return outputJSONNoFiles()
+		return outputJSONNoFiles(useChineseOutput)
 	}
 
 	// In agent mode (text output), restore stdout so Summary reaches the terminal.
@@ -177,15 +185,23 @@ func runReview(args []string) error {
 	}
 
 	if opts.outputFormat == "json" {
-		return outputJSONWithWarnings(comments, ag.Warnings(), ag.FilesReviewed(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration)
+		return outputJSONWithWarnings(comments, ag.Warnings(), ag.FilesReviewed(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration, useChineseOutput)
 	}
 	if opts.audience == "agent" {
-		outputTextWithWarnings(comments, ag.Warnings())
+		outputTextWithWarnings(comments, ag.Warnings(), useChineseOutput)
 		return nil
 	}
-	outputTextWithWarnings(comments, ag.Warnings())
+	outputTextWithWarnings(comments, ag.Warnings(), useChineseOutput)
 
 	return nil
+}
+
+func shouldUseChineseOutput(lang string, forceZH bool) bool {
+	if forceZH {
+		return true
+	}
+	s := strings.ToLower(strings.TrimSpace(lang))
+	return s == "chinese" || s == "zh" || s == "zh-cn" || s == "中文" || s == "简体中文"
 }
 
 func resolveRepoDir(input string) (string, error) {
